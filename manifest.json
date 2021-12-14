@@ -1,0 +1,19 @@
+{
+  "name": "Home Tab",
+  "version": "0.1.0",
+  "namespace": "entrhopi.HomeTab",
+  "package": "HomeTab.dll",
+  "manifest_version": 1,
+
+  "description": "Blish HUD Home Tab with useful information all around GW2",
+  "dependencies": {
+    "bh.blishhud": ">=0.11.0"
+  },
+  "url": "https://github.com/entrhopi/Blish-HUD-Home-Tab",
+  "contributors": [
+    {
+      "name": "entrhopi",
+      "username": "acplusm.9085"
+    }
+  ]
+}
