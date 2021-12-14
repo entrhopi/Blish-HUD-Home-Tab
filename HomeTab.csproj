@@ -6,7 +6,7 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <ProjectGuid>{4BB99667-FB4B-4A63-8F88-717ACEB8F710}</ProjectGuid>
     <OutputType>Library</OutputType>
-    <RootNamespace>acf.HomeTab</RootNamespace>
+    <RootNamespace>entrhopi.HomeTab</RootNamespace>
     <AssemblyName>HomeTab</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
@@ -205,6 +205,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="ref\_instructions.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="ref\255369.png" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
