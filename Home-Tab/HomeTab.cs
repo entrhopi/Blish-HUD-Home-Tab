@@ -1,4 +1,5 @@
 ﻿using Blish_HUD;
+using Blish_HUD.Common.UI.Views;
 using Blish_HUD.Controls;
 using Blish_HUD.Modules;
 using Blish_HUD.Modules.Managers;
@@ -29,7 +30,7 @@ namespace entrhopi.HomeTab
 
         private Texture2D _homeIcon;
 
-        internal string TabName = " Home ";
+        internal string TabName = "Home";
 
         [ImportingConstructor]
         public Module([Import("ModuleParameters")] ModuleParameters moduleParameters) : base(moduleParameters) { }
@@ -51,7 +52,11 @@ namespace entrhopi.HomeTab
 
         protected override void OnModuleLoaded(EventArgs e)
         {
-            _moduleTab = Overlay.BlishHudWindow.AddTab(TabName, _homeIcon, HomeTabView(Overlay.BlishHudWindow));
+            _moduleTab = Overlay.BlishHudWindow.AddTab(
+                TabName,
+                _homeIcon,
+                () => new StaticPanelView(HomeTabView(Overlay.BlishHudWindow)),
+                int.MinValue);
 
             // Base handler must be called
             base.OnModuleLoaded(e);
@@ -63,6 +68,28 @@ namespace entrhopi.HomeTab
             {
                 CanScroll = false,
                 Size = wndw.ContentRegion.Size
+            };
+
+            var testPanel = new Panel()
+            {
+                WidthPercent = 50,
+                HeightPercent = 50,
+                XPercent = 0,
+                YPercent = 0,
+                Anchor = AnchorPoint.TopLeft,
+                BackgroundColor = Color.Red,
+                Parent = parentPanel
+            };
+
+            var testPanel2 = new Panel()
+            {
+                WidthPercent = 45,
+                HeightPercent = 90,
+                XPercent = 100,
+                YPercent = 100,
+                Anchor = AnchorPoint.BottomRight,
+                BackgroundColor = Color.Green,
+                Parent = parentPanel
             };
 
             return parentPanel;
