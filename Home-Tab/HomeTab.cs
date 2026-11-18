@@ -27,6 +27,7 @@ namespace entrhopi.HomeTab
         private const string NewModulesFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
         private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
         private const string GuildWarsFeedUrl = "https://www.guildwars2.com/en/feed/";
+        private const int HeadingHeight = 36;
         private const int TabStripHeight = 36;
         private const int TabWidth = 150;
         private const int QuadrantGap = 8;
@@ -156,18 +157,18 @@ namespace entrhopi.HomeTab
                 Size = wndw.ContentRegion.Size
             };
 
-            // Top left: Guild Wars 2 news.
-            var topLeftPanel = new Panel()
+            // Top right: Guild Wars 2 news.
+            var topRightPanel = new Panel()
             {
                 Parent = parentPanel
             };
 
             var guildWarsHeader = new Panel()
             {
-                Parent          = topLeftPanel,
+                Parent          = topRightPanel,
                 Location        = Point.Zero,
                 WidthSizingMode = SizingMode.Fill,
-                Height          = TabStripHeight,
+                Height          = HeadingHeight,
                 BackgroundColor = ActiveTabColor
             };
 
@@ -175,7 +176,8 @@ namespace entrhopi.HomeTab
             {
                 Parent         = guildWarsHeader,
                 Location       = new Point(10, 5),
-                Text           = "Guild Wars 2",
+                Text           = "GW2 News",
+                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
                 TextColor      = Color.White,
                 AutoSizeWidth  = true,
                 AutoSizeHeight = true
@@ -183,8 +185,8 @@ namespace entrhopi.HomeTab
 
             var guildWarsContent = new Panel()
             {
-                Parent           = topLeftPanel,
-                Location         = new Point(0, TabStripHeight),
+                Parent           = topRightPanel,
+                Location         = new Point(0, HeadingHeight),
                 WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
@@ -197,10 +199,30 @@ namespace entrhopi.HomeTab
                 Parent = parentPanel
             };
 
+            var moduleHeader = new Panel()
+            {
+                Parent          = bottomRightPanel,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                Height          = HeadingHeight,
+                BackgroundColor = ActiveTabColor
+            };
+
+            new Label()
+            {
+                Parent         = moduleHeader,
+                Location       = new Point(10, 5),
+                Text           = "Module News",
+                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
+                TextColor      = Color.White,
+                AutoSizeWidth  = true,
+                AutoSizeHeight = true
+            };
+
             var tabStrip = new FlowPanel()
             {
                 Parent              = bottomRightPanel,
-                Location            = Point.Zero,
+                Location            = new Point(0, HeadingHeight),
                 WidthSizingMode     = SizingMode.Fill,
                 Height              = TabStripHeight,
                 FlowDirection       = ControlFlowDirection.SingleLeftToRight,
@@ -229,7 +251,7 @@ namespace entrhopi.HomeTab
             var contentPanel = new Panel()
             {
                 Parent           = bottomRightPanel,
-                Location         = new Point(0, TabStripHeight),
+                Location         = new Point(0, HeadingHeight + TabStripHeight),
                 WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
@@ -257,13 +279,13 @@ namespace entrhopi.HomeTab
             BuildFeedMenu(newModulesPanel, _newModules);
             BuildFeedMenu(moduleUpdatesPanel, _moduleUpdates);
 
-            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topLeftPanel, bottomRightPanel);
-            UpdateQuadrants(parentPanel, topLeftPanel, bottomRightPanel);
+            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topRightPanel, bottomRightPanel);
+            UpdateQuadrants(parentPanel, topRightPanel, bottomRightPanel);
 
             return parentPanel;
         }
 
-        private static void UpdateQuadrants(Panel parent, Panel topLeft, Panel bottomRight)
+        private static void UpdateQuadrants(Panel parent, Panel topRight, Panel bottomRight)
         {
             var width  = parent.ContentRegion.Width;
             var height = parent.ContentRegion.Height;
@@ -272,8 +294,8 @@ namespace entrhopi.HomeTab
             var rightColumnX   = quadrantWidth + QuadrantGap;
             var bottomRowY     = quadrantHeight + QuadrantGap;
 
-            topLeft.Location = Point.Zero;
-            topLeft.Size     = new Point(quadrantWidth, quadrantHeight);
+            topRight.Location = new Point(rightColumnX, 0);
+            topRight.Size     = new Point(quadrantWidth, quadrantHeight);
 
             bottomRight.Location = new Point(rightColumnX, bottomRowY);
             bottomRight.Size     = new Point(Math.Max(0, width - rightColumnX), Math.Max(0, height - bottomRowY));
