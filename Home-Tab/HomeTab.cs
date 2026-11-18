@@ -6,13 +6,16 @@ using Blish_HUD.Modules.Managers;
 using Blish_HUD.Settings;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Newtonsoft.Json.Linq;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -27,6 +30,7 @@ namespace entrhopi.HomeTab
         private const string NewModulesFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
         private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
         private const string GuildWarsFeedUrl = "https://www.guildwars2.com/en/feed/";
+        private const string DailiesUrl = "https://api.guildwars2.com/v2/account/wizardsvault/daily";
         private const int HeadingHeight = 36;
         private const int TabStripHeight = 36;
         private const int TabWidth = 150;
@@ -54,6 +58,13 @@ namespace entrhopi.HomeTab
         private readonly List<RssItem> _newModules = new List<RssItem>();
         private readonly List<RssItem> _moduleUpdates = new List<RssItem>();
         private readonly List<RssItem> _guildWarsNews = new List<RssItem>();
+        private readonly List<string> _dailies = new List<string>();
+        private string _dailiesMessage = string.Empty;
+        private Panel _dailiesPanel;
+        private bool _dailiesDirty;
+        private bool _dailiesNeedsRetry;
+        private bool _dailiesLoading;
+        private DateTime _nextDailiesAttempt = DateTime.MinValue;
 
         internal string TabName = "Home";
 
@@ -75,7 +86,8 @@ namespace entrhopi.HomeTab
             await Task.WhenAll(
                 LoadFeed(NewModulesFeedUrl, _newModules),
                 LoadFeed(ModuleUpdatesFeedUrl, _moduleUpdates),
-                LoadFeed(GuildWarsFeedUrl, _guildWarsNews)).ConfigureAwait(false);
+                LoadFeed(GuildWarsFeedUrl, _guildWarsNews),
+                LoadDailies()).ConfigureAwait(false);
         }
 
         private static async Task LoadFeed(string url, List<RssItem> target)
@@ -91,6 +103,121 @@ namespace entrhopi.HomeTab
             catch (Exception ex)
             {
                 Logger.Warn(ex, "Failed to load RSS feed from {url}.", url);
+            }
+        }
+
+        private async Task LoadDailies()
+        {
+            if (_dailiesLoading) return;
+
+            _dailiesLoading = true;
+            _dailies.Clear();
+
+            try
+            {
+                if (!TryGetConfiguredApiKey(out var apiKey))
+                {
+                    _dailiesMessage = "Please configure an API key in the Blish HUD settings.";
+                    _dailiesNeedsRetry = true;
+                    return;
+                }
+
+                try
+                {
+                    using (var client = new WebClient())
+                    {
+                        client.Headers.Add("Authorization", "Bearer " + apiKey);
+                        var json = await client.DownloadStringTaskAsync(DailiesUrl).ConfigureAwait(false);
+                        ParseDailies(json);
+                        _dailiesMessage = string.Empty;
+                        _dailiesNeedsRetry = false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn(ex, "Failed to load Wizard's Vault dailies.");
+                    _dailiesMessage = "Could not load dailies. Make sure the configured API key has the accountprogression permission.";
+                    _dailiesNeedsRetry = true;
+                }
+            }
+            finally
+            {
+                _dailiesLoading = false;
+                _dailiesDirty = true;
+            }
+        }
+
+        private static bool TryGetConfiguredApiKey(out string apiKey)
+        {
+            apiKey = string.Empty;
+
+            try
+            {
+                var webApi = Gw2WebApi;
+                var webApiType = webApi.GetType();
+
+                // Prefer the key Blish HUD is currently using for this character.
+                var connectionField = webApiType.GetField("_privilegedConnection", BindingFlags.Instance | BindingFlags.NonPublic);
+                var connection = connectionField?.GetValue(webApi);
+                if (connection != null)
+                {
+                    var hasKeyMethod = connection.GetType().GetMethod("HasApiKey");
+                    if (hasKeyMethod != null && (bool)hasKeyMethod.Invoke(connection, null))
+                    {
+                        var connectionProperty = connection.GetType().GetProperty("Connection");
+                        var innerConnection = connectionProperty?.GetValue(connection);
+                        var tokenProperty = innerConnection?.GetType().GetProperty("AccessToken");
+                        apiKey = tokenProperty?.GetValue(innerConnection) as string ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(apiKey)) return true;
+                    }
+                }
+
+                // Fall back to any key registered in Blish HUD settings.
+                var repositoryField = webApiType.GetField("_apiKeyRepository", BindingFlags.Instance | BindingFlags.NonPublic);
+                if (repositoryField?.GetValue(webApi) is IEnumerable repository)
+                {
+                    foreach (var setting in repository)
+                    {
+                        var valueProperty = setting?.GetType().GetProperty("Value");
+                        var value = valueProperty?.GetValue(setting) as string;
+                        if (!string.IsNullOrWhiteSpace(value))
+                        {
+                            apiKey = value;
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, "Failed to read a configured Blish HUD API key.");
+                return false;
+            }
+        }
+
+        private void ParseDailies(string json)
+        {
+            var root = JObject.Parse(json);
+
+            var metaCurrent = root.Value<int?>("meta_progress_current") ?? 0;
+            var metaComplete = root.Value<int?>("meta_progress_complete") ?? 0;
+            var metaClaimed = root.Value<bool?>("meta_reward_claimed") ?? false;
+            _dailies.Add($"Daily meta: {metaCurrent}/{metaComplete}{(metaClaimed ? " (claimed)" : string.Empty)}");
+
+            if (!(root["objectives"] is JArray objectives)) return;
+
+            foreach (var objective in objectives)
+            {
+                var title = objective.Value<string>("title") ?? "Objective";
+                var current = objective.Value<int?>("progress_current") ?? 0;
+                var complete = objective.Value<int?>("progress_complete") ?? 0;
+                var claimed = objective.Value<bool?>("claimed") ?? false;
+                var track = objective.Value<string>("track");
+                var trackText = string.IsNullOrWhiteSpace(track) ? string.Empty : $" [{track}]";
+
+                _dailies.Add($"{title}{trackText}  ({current}/{complete}){(claimed ? " ✓" : string.Empty)}");
             }
         }
 
@@ -157,15 +284,15 @@ namespace entrhopi.HomeTab
                 Size = wndw.ContentRegion.Size
             };
 
-            // Top right: Guild Wars 2 news.
-            var topRightPanel = new Panel()
+            // Bottom left: Guild Wars 2 news.
+            var bottomLeftPanel = new Panel()
             {
                 Parent = parentPanel
             };
 
             var guildWarsHeader = new Panel()
             {
-                Parent          = topRightPanel,
+                Parent          = bottomLeftPanel,
                 Location        = Point.Zero,
                 WidthSizingMode = SizingMode.Fill,
                 Height          = HeadingHeight,
@@ -185,13 +312,53 @@ namespace entrhopi.HomeTab
 
             var guildWarsContent = new Panel()
             {
-                Parent           = topRightPanel,
+                Parent           = bottomLeftPanel,
                 Location         = new Point(0, HeadingHeight),
                 WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
 
             BuildFeedMenu(guildWarsContent, _guildWarsNews);
+
+            // Top right: Wizard's Vault dailies.
+            var topRightPanel = new Panel()
+            {
+                Parent = parentPanel
+            };
+
+            var dailiesHeader = new Panel()
+            {
+                Parent          = topRightPanel,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                Height          = HeadingHeight,
+                BackgroundColor = ActiveTabColor
+            };
+
+            new Label()
+            {
+                Parent         = dailiesHeader,
+                Location       = new Point(10, 5),
+                Text           = "Dailies",
+                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
+                TextColor      = Color.White,
+                AutoSizeWidth  = true,
+                AutoSizeHeight = true
+            };
+
+            var dailiesContent = new Panel()
+            {
+                Parent           = topRightPanel,
+                Location         = new Point(0, HeadingHeight),
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            dailiesContent.Resized += (sender, args) => UpdateDailiesMessageWidth(dailiesContent);
+
+            _dailiesPanel = dailiesContent;
+            BuildDailiesView(dailiesContent);
+            _dailiesDirty = false;
 
             // Bottom right: tabbed Blish HUD module feeds.
             var bottomRightPanel = new Panel()
@@ -230,19 +397,19 @@ namespace entrhopi.HomeTab
                 OuterControlPadding = new Vector2(8, 4)
             };
 
-            var newModulesTab = new Label()
+            var moduleUpdatesTab = new Label()
             {
                 Parent          = tabStrip,
-                Text            = "New Modules",
+                Text            = "Module Updates",
                 Size            = new Point(TabWidth, StandardButton.STANDARD_CONTROL_HEIGHT),
                 TextColor       = Color.White,
                 BackgroundColor = ActiveTabColor
             };
 
-            var moduleUpdatesTab = new Label()
+            var newModulesTab = new Label()
             {
                 Parent          = tabStrip,
-                Text            = "Module Updates",
+                Text            = "New Modules",
                 Size            = new Point(TabWidth, StandardButton.STANDARD_CONTROL_HEIGHT),
                 TextColor       = Color.LightGray,
                 BackgroundColor = Color.Transparent
@@ -261,7 +428,8 @@ namespace entrhopi.HomeTab
                 Parent           = contentPanel,
                 Location         = Point.Zero,
                 WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill
+                HeightSizingMode = SizingMode.Fill,
+                Visible          = false
             };
 
             var moduleUpdatesPanel = new Panel()
@@ -269,8 +437,7 @@ namespace entrhopi.HomeTab
                 Parent           = contentPanel,
                 Location         = Point.Zero,
                 WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill,
-                Visible          = false
+                HeightSizingMode = SizingMode.Fill
             };
 
             newModulesTab.Click += (sender, args) => SelectTab(newModulesTab, newModulesPanel, moduleUpdatesTab, moduleUpdatesPanel);
@@ -279,13 +446,13 @@ namespace entrhopi.HomeTab
             BuildFeedMenu(newModulesPanel, _newModules);
             BuildFeedMenu(moduleUpdatesPanel, _moduleUpdates);
 
-            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topRightPanel, bottomRightPanel);
-            UpdateQuadrants(parentPanel, topRightPanel, bottomRightPanel);
+            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
+            UpdateQuadrants(parentPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
 
             return parentPanel;
         }
 
-        private static void UpdateQuadrants(Panel parent, Panel topRight, Panel bottomRight)
+        private static void UpdateQuadrants(Panel parent, Panel topRight, Panel bottomLeft, Panel bottomRight)
         {
             var width  = parent.ContentRegion.Width;
             var height = parent.ContentRegion.Height;
@@ -293,12 +460,16 @@ namespace entrhopi.HomeTab
             var quadrantHeight = Math.Max(0, (height - QuadrantGap) / 2);
             var rightColumnX   = quadrantWidth + QuadrantGap;
             var bottomRowY     = quadrantHeight + QuadrantGap;
+            var bottomHeight   = Math.Max(0, height - bottomRowY);
 
             topRight.Location = new Point(rightColumnX, 0);
             topRight.Size     = new Point(quadrantWidth, quadrantHeight);
 
+            bottomLeft.Location = new Point(0, bottomRowY);
+            bottomLeft.Size     = new Point(quadrantWidth, bottomHeight);
+
             bottomRight.Location = new Point(rightColumnX, bottomRowY);
-            bottomRight.Size     = new Point(Math.Max(0, width - rightColumnX), Math.Max(0, height - bottomRowY));
+            bottomRight.Size     = new Point(Math.Max(0, width - rightColumnX), bottomHeight);
         }
 
         private static void SelectTab(Label selectedTab, Panel selectedPanel, Label otherTab, Panel otherPanel)
@@ -310,6 +481,60 @@ namespace entrhopi.HomeTab
 
             selectedPanel.Visible = true;
             otherPanel.Visible    = false;
+        }
+
+        private void BuildDailiesView(Panel parent)
+        {
+            var scrollPanel = new Panel()
+            {
+                Parent           = parent,
+                Location         = Point.Zero,
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill,
+                CanScroll        = true
+            };
+
+            if (!string.IsNullOrWhiteSpace(_dailiesMessage))
+            {
+                new Label()
+                {
+                    Parent         = scrollPanel,
+                    Location       = new Point(10, 10),
+                    Width          = Math.Max(0, scrollPanel.ContentRegion.Width - 20),
+                    Text           = _dailiesMessage,
+                    Font           = Content.DefaultFont16,
+                    TextColor      = Color.White,
+                    WrapText       = true,
+                    AutoSizeWidth  = false,
+                    AutoSizeHeight = true
+                };
+
+                return;
+            }
+
+            var menu = new Menu()
+            {
+                Parent          = scrollPanel,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                MenuItemHeight  = 36
+            };
+
+            foreach (var entry in _dailies)
+            {
+                menu.AddMenuItem(entry);
+            }
+        }
+
+        private static void UpdateDailiesMessageWidth(Panel contentPanel)
+        {
+            foreach (var scrollPanel in contentPanel.Children.OfType<Panel>())
+            {
+                foreach (var label in scrollPanel.Children.OfType<Label>())
+                {
+                    label.Width = Math.Max(0, scrollPanel.ContentRegion.Width - 20);
+                }
+            }
         }
 
         private static void BuildFeedMenu(Panel parent, IEnumerable<RssItem> items)
@@ -376,7 +601,18 @@ namespace entrhopi.HomeTab
 
         protected override void Update(GameTime gameTime)
         {
+            if (_dailiesNeedsRetry && !_dailiesLoading && DateTime.UtcNow >= _nextDailiesAttempt)
+            {
+                _nextDailiesAttempt = DateTime.UtcNow.AddSeconds(5);
+                _ = LoadDailies();
+            }
 
+            if (_dailiesDirty && _dailiesPanel != null)
+            {
+                _dailiesPanel.ClearChildren();
+                BuildDailiesView(_dailiesPanel);
+                _dailiesDirty = false;
+            }
         }
 
         /// <inheritdoc />
