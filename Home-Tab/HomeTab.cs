@@ -16,6 +16,7 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
@@ -284,6 +285,42 @@ namespace entrhopi.HomeTab
                 Size = wndw.ContentRegion.Size
             };
 
+            // Top left: newest Guild Wars 2 news entry.
+            var topLeftPanel = new Panel()
+            {
+                Parent = parentPanel
+            };
+
+            var latestNewsHeader = new Panel()
+            {
+                Parent          = topLeftPanel,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                Height          = HeadingHeight,
+                BackgroundColor = ActiveTabColor
+            };
+
+            new Label()
+            {
+                Parent         = latestNewsHeader,
+                Location       = new Point(10, 5),
+                Text           = "Latest News",
+                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
+                TextColor      = Color.White,
+                AutoSizeWidth  = true,
+                AutoSizeHeight = true
+            };
+
+            var latestNewsContent = new Panel()
+            {
+                Parent           = topLeftPanel,
+                Location         = new Point(0, HeadingHeight),
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            BuildFeaturedNews(latestNewsContent, _guildWarsNews.OrderByDescending(entry => entry.PublishedAt).FirstOrDefault());
+
             // Bottom left: Guild Wars 2 news.
             var bottomLeftPanel = new Panel()
             {
@@ -303,7 +340,7 @@ namespace entrhopi.HomeTab
             {
                 Parent         = guildWarsHeader,
                 Location       = new Point(10, 5),
-                Text           = "GW2 News",
+                Text           = "More GW2 News",
                 Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
                 TextColor      = Color.White,
                 AutoSizeWidth  = true,
@@ -318,7 +355,7 @@ namespace entrhopi.HomeTab
                 HeightSizingMode = SizingMode.Fill
             };
 
-            BuildFeedMenu(guildWarsContent, _guildWarsNews);
+            BuildFeedMenu(guildWarsContent, _guildWarsNews, 1);
 
             // Top right: Wizard's Vault dailies.
             var topRightPanel = new Panel()
@@ -353,8 +390,6 @@ namespace entrhopi.HomeTab
                 WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
-
-            dailiesContent.Resized += (sender, args) => UpdateDailiesMessageWidth(dailiesContent);
 
             _dailiesPanel = dailiesContent;
             BuildDailiesView(dailiesContent);
@@ -446,21 +481,24 @@ namespace entrhopi.HomeTab
             BuildFeedMenu(newModulesPanel, _newModules);
             BuildFeedMenu(moduleUpdatesPanel, _moduleUpdates);
 
-            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
-            UpdateQuadrants(parentPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
+            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topLeftPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
+            UpdateQuadrants(parentPanel, topLeftPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
 
             return parentPanel;
         }
 
-        private static void UpdateQuadrants(Panel parent, Panel topRight, Panel bottomLeft, Panel bottomRight)
+        private static void UpdateQuadrants(Panel parent, Panel topLeft, Panel topRight, Panel bottomLeft, Panel bottomRight)
         {
-            var width  = parent.ContentRegion.Width;
-            var height = parent.ContentRegion.Height;
+            var width  = parent.Width;
+            var height = parent.Height;
             var quadrantWidth  = Math.Max(0, (width - QuadrantGap) / 2);
             var quadrantHeight = Math.Max(0, (height - QuadrantGap) / 2);
             var rightColumnX   = quadrantWidth + QuadrantGap;
             var bottomRowY     = quadrantHeight + QuadrantGap;
             var bottomHeight   = Math.Max(0, height - bottomRowY);
+
+            topLeft.Location = Point.Zero;
+            topLeft.Size     = new Point(quadrantWidth, quadrantHeight);
 
             topRight.Location = new Point(rightColumnX, 0);
             topRight.Size     = new Point(quadrantWidth, quadrantHeight);
@@ -490,17 +528,17 @@ namespace entrhopi.HomeTab
                 Parent           = parent,
                 Location         = Point.Zero,
                 WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill,
-                CanScroll        = true
+                HeightSizingMode = SizingMode.Fill
             };
+
+            // Panel.CanScroll must be set after the panel has its size/parent set.
+            scrollPanel.CanScroll = true;
 
             if (!string.IsNullOrWhiteSpace(_dailiesMessage))
             {
-                new Label()
+                var message = new Label()
                 {
                     Parent         = scrollPanel,
-                    Location       = new Point(10, 10),
-                    Width          = Math.Max(0, scrollPanel.ContentRegion.Width - 20),
                     Text           = _dailiesMessage,
                     Font           = Content.DefaultFont16,
                     TextColor      = Color.White,
@@ -509,6 +547,10 @@ namespace entrhopi.HomeTab
                     AutoSizeHeight = true
                 };
 
+                scrollPanel.Resized += (sender, args) => LayoutDailiesMessage(parent, message, _dailiesMessage);
+                parent.Resized += (sender, args) => LayoutDailiesMessage(parent, message, _dailiesMessage);
+                scrollPanel.ContentResized += (sender, args) => LayoutDailiesMessage(parent, message, _dailiesMessage);
+                LayoutDailiesMessage(parent, message, _dailiesMessage);
                 return;
             }
 
@@ -526,27 +568,249 @@ namespace entrhopi.HomeTab
             }
         }
 
-        private static void UpdateDailiesMessageWidth(Panel contentPanel)
+        private static void LayoutDailiesMessage(Panel parent, Label message, string text)
         {
-            foreach (var scrollPanel in contentPanel.Children.OfType<Panel>())
+            var width = GetPaddedContentWidth(parent);
+            var wrapped = WrapTextForWidth(message, text, width);
+
+            message.WrapText = false;
+            if (message.Text != wrapped)
             {
-                foreach (var label in scrollPanel.Children.OfType<Label>())
-                {
-                    label.Width = Math.Max(0, scrollPanel.ContentRegion.Width - 20);
-                }
+                message.Text = wrapped;
             }
+
+            if (message.Width != width)
+            {
+                message.Width = width;
+            }
+
+            RefreshWrappedLabel(message);
+            message.Location = new Point(10, 10);
         }
 
-        private static void BuildFeedMenu(Panel parent, IEnumerable<RssItem> items)
+        private static void RefreshWrappedLabel(Label label)
+        {
+            // LabelBase wraps text using the previous LabelRegion width, so a
+            // second pass is needed after the width changes to reflow correctly.
+            label.RecalculateLayout();
+            label.RecalculateLayout();
+        }
+
+        private static int GetPaddedContentWidth(Panel parent)
+        {
+            var width = parent.Width;
+
+            if (parent.Parent != null)
+            {
+                width = Math.Min(width, parent.Parent.Width);
+            }
+
+            return Math.Max(0, width - 20);
+        }
+
+        private static string WrapTextForWidth(Label label, string text, int maxWidth)
+        {
+            if (string.IsNullOrWhiteSpace(text) || maxWidth <= 0) return text;
+
+            var font = label.Font;
+            var result = new StringBuilder();
+
+            foreach (var paragraph in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+            {
+                var line = new StringBuilder();
+
+                foreach (var word in paragraph.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var candidate = line.Length == 0 ? word : line + " " + word;
+
+                    if (font.MeasureString(candidate).Width <= maxWidth)
+                    {
+                        if (line.Length > 0)
+                        {
+                            line.Append(' ');
+                        }
+
+                        line.Append(word);
+                        continue;
+                    }
+
+                    if (line.Length > 0)
+                    {
+                        result.Append(line).Append('\n');
+                        line.Clear();
+                    }
+
+                    var remaining = word;
+                    while (remaining.Length > 1 && font.MeasureString(remaining).Width > maxWidth)
+                    {
+                        var length = remaining.Length - 1;
+                        while (length > 1 && font.MeasureString(remaining.Substring(0, length)).Width > maxWidth)
+                        {
+                            length--;
+                        }
+
+                        result.Append(remaining.Substring(0, length)).Append('\n');
+                        remaining = remaining.Substring(length);
+                    }
+
+                    line.Append(remaining);
+                }
+
+                result.Append(line).Append('\n');
+            }
+
+            return result.ToString().TrimEnd('\n');
+        }
+
+        private static void BuildFeaturedNews(Panel parent, RssItem item)
         {
             var scrollPanel = new Panel()
             {
                 Parent           = parent,
                 Location         = Point.Zero,
                 WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill,
-                CanScroll        = true
+                HeightSizingMode = SizingMode.Fill
             };
+
+            // Panel.CanScroll must be set after the panel has its size/parent set.
+            scrollPanel.CanScroll = true;
+
+            var labels = new List<KeyValuePair<Label, string>>();
+
+            if (item == null)
+            {
+                var noNews = new Label()
+                {
+                    Parent         = scrollPanel,
+                    Text           = "No news available.",
+                    Font           = Content.DefaultFont14,
+                    TextColor      = Color.White,
+                    WrapText       = true,
+                    AutoSizeWidth  = false,
+                    AutoSizeHeight = true
+                };
+
+                labels.Add(new KeyValuePair<Label, string>(noNews, "No news available."));
+            }
+            else
+            {
+                var title = new Label()
+                {
+                    Parent         = scrollPanel,
+                    Text           = item.Title,
+                    Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
+                    TextColor      = Color.White,
+                    WrapText       = true,
+                    AutoSizeWidth  = false,
+                    AutoSizeHeight = true
+                };
+
+                if (!string.IsNullOrWhiteSpace(item.Link))
+                {
+                    title.BasicTooltipText = "Open in browser";
+                    title.Click += (sender, args) => OpenLink(item.Link);
+                }
+
+                labels.Add(new KeyValuePair<Label, string>(title, item.Title));
+
+                var meta = string.Join("  •  ", new[] { item.Published, item.Author }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)));
+                if (!string.IsNullOrWhiteSpace(meta))
+                {
+                    var metaLabel = new Label()
+                    {
+                        Parent         = scrollPanel,
+                        Text           = meta,
+                        Font           = Content.DefaultFont14,
+                        TextColor      = Color.LightGray,
+                        WrapText       = true,
+                        AutoSizeWidth  = false,
+                        AutoSizeHeight = true
+                    };
+
+                    labels.Add(new KeyValuePair<Label, string>(metaLabel, meta));
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.Description))
+                {
+                    var description = new Label()
+                    {
+                        Parent         = scrollPanel,
+                        Text           = item.Description,
+                        Font           = Content.DefaultFont16,
+                        TextColor      = Color.White,
+                        WrapText       = true,
+                        AutoSizeWidth  = false,
+                        AutoSizeHeight = true
+                    };
+
+                    labels.Add(new KeyValuePair<Label, string>(description, item.Description));
+                }
+
+                if (!string.IsNullOrWhiteSpace(item.Link))
+                {
+                    var link = new Label()
+                    {
+                        Parent           = scrollPanel,
+                        Text             = "Open in browser",
+                        Font             = Content.DefaultFont12,
+                        TextColor        = Color.LightGray,
+                        WrapText         = true,
+                        AutoSizeWidth    = false,
+                        AutoSizeHeight   = true,
+                        BasicTooltipText = item.Link
+                    };
+
+                    link.Click += (sender, args) => OpenLink(item.Link);
+                    labels.Add(new KeyValuePair<Label, string>(link, "Open in browser"));
+                }
+            }
+
+            scrollPanel.Resized += (sender, args) => LayoutFeaturedNews(parent, labels);
+            parent.Resized += (sender, args) => LayoutFeaturedNews(parent, labels);
+            scrollPanel.ContentResized += (sender, args) => LayoutFeaturedNews(parent, labels);
+            LayoutFeaturedNews(parent, labels);
+        }
+
+        private static void LayoutFeaturedNews(Panel parent, IList<KeyValuePair<Label, string>> labels)
+        {
+            var width = GetPaddedContentWidth(parent);
+            var y = 10;
+
+            foreach (var entry in labels)
+            {
+                var label = entry.Key;
+                var wrapped = WrapTextForWidth(label, entry.Value, width);
+
+                label.WrapText = false;
+                if (label.Text != wrapped)
+                {
+                    label.Text = wrapped;
+                }
+
+                if (label.Width != width)
+                {
+                    label.Width = width;
+                }
+
+                RefreshWrappedLabel(label);
+                label.Location = new Point(10, y);
+                y += label.Height + 6;
+            }
+        }
+
+        private static void BuildFeedMenu(Panel parent, IEnumerable<RssItem> items, int skip = 0)
+        {
+            var scrollPanel = new Panel()
+            {
+                Parent           = parent,
+                Location         = Point.Zero,
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            // Panel.CanScroll must be set after the panel has its size/parent set.
+            scrollPanel.CanScroll = true;
 
             var menu = new Menu()
             {
@@ -558,6 +822,7 @@ namespace entrhopi.HomeTab
 
             foreach (var item in items
                 .OrderByDescending(entry => entry.PublishedAt)
+                .Skip(skip)
                 .Take(MaxMenuEntries))
             {
                 var menuItem = menu.AddMenuItem(item.Title);
