@@ -230,8 +230,31 @@ namespace entrhopi.HomeTab
                 () => new StaticPanelView(HomeTabView(Overlay.BlishHudWindow)),
                 int.MinValue);
 
+            SelectModuleTab();
+
             // Base handler must be called
             base.OnModuleLoaded(e);
+        }
+
+        private void SelectModuleTab()
+        {
+            if (_moduleTab == null) return;
+
+            // Blish HUD does not expose the tab collection, only SelectedTabIndex.
+            // Read the private list so we can select our tab without assuming it is index 0.
+            var tabsField = typeof(TabbedWindow).GetField("_tabs", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (tabsField?.GetValue(Overlay.BlishHudWindow) is IList tabs)
+            {
+                var index = tabs.IndexOf(_moduleTab);
+                if (index >= 0)
+                {
+                    Overlay.BlishHudWindow.SelectedTabIndex = index;
+                    return;
+                }
+            }
+
+            // Fallback for Blish HUD versions where the private field changes.
+            Overlay.BlishHudWindow.SelectedTabIndex = 0;
         }
 
         private static void ParseFeed(string xml, string url, List<RssItem> target)
