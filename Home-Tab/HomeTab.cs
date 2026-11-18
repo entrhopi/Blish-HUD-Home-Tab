@@ -9,6 +9,8 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
@@ -24,8 +26,11 @@ namespace entrhopi.HomeTab
 
         private const string NewModulesFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
         private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
+        private const string GuildWarsFeedUrl = "https://www.guildwars2.com/en/feed/";
         private const int TabStripHeight = 36;
         private const int TabWidth = 150;
+        private const int QuadrantGap = 8;
+        private const int MaxMenuEntries = 5;
 
         private static readonly Color ActiveTabColor = Color.FromNonPremultiplied(55, 55, 55, 255);
 
@@ -47,6 +52,7 @@ namespace entrhopi.HomeTab
 
         private readonly List<RssItem> _newModules = new List<RssItem>();
         private readonly List<RssItem> _moduleUpdates = new List<RssItem>();
+        private readonly List<RssItem> _guildWarsNews = new List<RssItem>();
 
         internal string TabName = "Home";
 
@@ -67,7 +73,8 @@ namespace entrhopi.HomeTab
         {
             await Task.WhenAll(
                 LoadFeed(NewModulesFeedUrl, _newModules),
-                LoadFeed(ModuleUpdatesFeedUrl, _moduleUpdates)).ConfigureAwait(false);
+                LoadFeed(ModuleUpdatesFeedUrl, _moduleUpdates),
+                LoadFeed(GuildWarsFeedUrl, _guildWarsNews)).ConfigureAwait(false);
         }
 
         private static async Task LoadFeed(string url, List<RssItem> target)
@@ -108,13 +115,20 @@ namespace entrhopi.HomeTab
             }
 
             target.Clear();
-            target.AddRange(channel.Elements("item").Select(item => new RssItem()
+            target.AddRange(channel.Elements("item").Select(item =>
             {
-                Title       = ElementValue(item, "title"),
-                Link        = ElementValue(item, "link"),
-                Published   = ElementValue(item, "pubDate"),
-                Author      = ElementValue(item, DcNamespace + "creator"),
-                Description = ToPlainText(ElementValue(item, "description"))
+                var published = ElementValue(item, "pubDate");
+                DateTimeOffset.TryParse(published, CultureInfo.InvariantCulture, DateTimeStyles.None, out var publishedAt);
+
+                return new RssItem()
+                {
+                    Title       = ElementValue(item, "title"),
+                    Link        = ElementValue(item, "link"),
+                    Published   = published,
+                    PublishedAt = publishedAt,
+                    Author      = ElementValue(item, DcNamespace + "creator"),
+                    Description = ToPlainText(ElementValue(item, "description"))
+                };
             }));
         }
 
@@ -142,9 +156,50 @@ namespace entrhopi.HomeTab
                 Size = wndw.ContentRegion.Size
             };
 
+            // Top left: Guild Wars 2 news.
+            var topLeftPanel = new Panel()
+            {
+                Parent = parentPanel
+            };
+
+            var guildWarsHeader = new Panel()
+            {
+                Parent          = topLeftPanel,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                Height          = TabStripHeight,
+                BackgroundColor = ActiveTabColor
+            };
+
+            new Label()
+            {
+                Parent         = guildWarsHeader,
+                Location       = new Point(10, 5),
+                Text           = "Guild Wars 2",
+                TextColor      = Color.White,
+                AutoSizeWidth  = true,
+                AutoSizeHeight = true
+            };
+
+            var guildWarsContent = new Panel()
+            {
+                Parent           = topLeftPanel,
+                Location         = new Point(0, TabStripHeight),
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            BuildFeedMenu(guildWarsContent, _guildWarsNews);
+
+            // Bottom right: tabbed Blish HUD module feeds.
+            var bottomRightPanel = new Panel()
+            {
+                Parent = parentPanel
+            };
+
             var tabStrip = new FlowPanel()
             {
-                Parent              = parentPanel,
+                Parent              = bottomRightPanel,
                 Location            = Point.Zero,
                 WidthSizingMode     = SizingMode.Fill,
                 Height              = TabStripHeight,
@@ -173,7 +228,7 @@ namespace entrhopi.HomeTab
 
             var contentPanel = new Panel()
             {
-                Parent           = parentPanel,
+                Parent           = bottomRightPanel,
                 Location         = new Point(0, TabStripHeight),
                 WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
@@ -199,10 +254,29 @@ namespace entrhopi.HomeTab
             newModulesTab.Click += (sender, args) => SelectTab(newModulesTab, newModulesPanel, moduleUpdatesTab, moduleUpdatesPanel);
             moduleUpdatesTab.Click += (sender, args) => SelectTab(moduleUpdatesTab, moduleUpdatesPanel, newModulesTab, newModulesPanel);
 
-            BuildFeedList(newModulesPanel, _newModules);
-            BuildFeedList(moduleUpdatesPanel, _moduleUpdates);
+            BuildFeedMenu(newModulesPanel, _newModules);
+            BuildFeedMenu(moduleUpdatesPanel, _moduleUpdates);
+
+            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topLeftPanel, bottomRightPanel);
+            UpdateQuadrants(parentPanel, topLeftPanel, bottomRightPanel);
 
             return parentPanel;
+        }
+
+        private static void UpdateQuadrants(Panel parent, Panel topLeft, Panel bottomRight)
+        {
+            var width  = parent.ContentRegion.Width;
+            var height = parent.ContentRegion.Height;
+            var quadrantWidth  = Math.Max(0, (width - QuadrantGap) / 2);
+            var quadrantHeight = Math.Max(0, (height - QuadrantGap) / 2);
+            var rightColumnX   = quadrantWidth + QuadrantGap;
+            var bottomRowY     = quadrantHeight + QuadrantGap;
+
+            topLeft.Location = Point.Zero;
+            topLeft.Size     = new Point(quadrantWidth, quadrantHeight);
+
+            bottomRight.Location = new Point(rightColumnX, bottomRowY);
+            bottomRight.Size     = new Point(Math.Max(0, width - rightColumnX), Math.Max(0, height - bottomRowY));
         }
 
         private static void SelectTab(Label selectedTab, Panel selectedPanel, Label otherTab, Panel otherPanel)
@@ -216,54 +290,66 @@ namespace entrhopi.HomeTab
             otherPanel.Visible    = false;
         }
 
-        private static void BuildFeedList(Panel parent, IEnumerable<RssItem> items)
+        private static void BuildFeedMenu(Panel parent, IEnumerable<RssItem> items)
         {
-            var feedList = new FlowPanel()
+            var scrollPanel = new Panel()
             {
-                Parent              = parent,
-                Location            = Point.Zero,
-                WidthSizingMode     = SizingMode.Fill,
-                HeightSizingMode    = SizingMode.Fill,
-                CanScroll           = true,
-                FlowDirection       = ControlFlowDirection.SingleTopToBottom,
-                ControlPadding      = new Vector2(0, 10),
-                OuterControlPadding = new Vector2(10, 10)
+                Parent           = parent,
+                Location         = Point.Zero,
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill,
+                CanScroll        = true
             };
 
-            foreach (var item in items)
+            var menu = new Menu()
             {
-                var lines = new List<string>();
+                Parent          = scrollPanel,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                MenuItemHeight  = 36
+            };
 
-                if (!string.IsNullOrWhiteSpace(item.Title)) lines.Add(item.Title);
+            foreach (var item in items
+                .OrderByDescending(entry => entry.PublishedAt)
+                .Take(MaxMenuEntries))
+            {
+                var menuItem = menu.AddMenuItem(item.Title);
+                menuItem.BasicTooltipText = BuildTooltip(item);
 
-                var meta = string.Join("  •  ", new[] { item.Published, item.Author }
-                    .Where(value => !string.IsNullOrWhiteSpace(value)));
-                if (!string.IsNullOrWhiteSpace(meta)) lines.Add(meta);
-
-                if (!string.IsNullOrWhiteSpace(item.Description)) lines.Add(item.Description);
-                if (!string.IsNullOrWhiteSpace(item.Link)) lines.Add(item.Link);
-
-                var itemPanel = new Panel()
+                if (!string.IsNullOrWhiteSpace(item.Link))
                 {
-                    Parent           = feedList,
-                    WidthSizingMode  = SizingMode.Fill,
-                    HeightSizingMode = SizingMode.AutoSize
-                };
-
-                var itemLabel = new Label()
-                {
-                    Parent         = itemPanel,
-                    Location       = Point.Zero,
-                    Text           = string.Join("\n", lines),
-                    WrapText       = true,
-                    AutoSizeWidth  = false,
-                    AutoSizeHeight = true,
-                    TextColor      = Color.White
-                };
-
-                itemPanel.Resized += (sender, args) => itemLabel.Width = itemPanel.ContentRegion.Width;
-                itemLabel.Width = itemPanel.ContentRegion.Width;
+                    var link = item.Link;
+                    menuItem.Click += (sender, args) => OpenLink(link);
+                }
             }
+        }
+
+        private static void OpenLink(string url)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, "Failed to open link {url}.", url);
+            }
+        }
+
+        private static string BuildTooltip(RssItem item)
+        {
+            var lines = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(item.Title)) lines.Add(item.Title);
+
+            var meta = string.Join("  •  ", new[] { item.Published, item.Author }
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+            if (!string.IsNullOrWhiteSpace(meta)) lines.Add(meta);
+
+            if (!string.IsNullOrWhiteSpace(item.Description)) lines.Add(item.Description);
+            if (!string.IsNullOrWhiteSpace(item.Link)) lines.Add(item.Link);
+
+            return string.Join("\n", lines);
         }
 
         protected override void Update(GameTime gameTime)
@@ -284,6 +370,7 @@ namespace entrhopi.HomeTab
             public string Title { get; set; }
             public string Link { get; set; }
             public string Published { get; set; }
+            public DateTimeOffset PublishedAt { get; set; }
             public string Author { get; set; }
             public string Description { get; set; }
         }
