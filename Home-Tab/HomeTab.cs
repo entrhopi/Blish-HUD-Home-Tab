@@ -24,7 +24,10 @@ namespace entrhopi.HomeTab
 
         private const string NewModulesFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
         private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
-        private const int PanelGap = 8;
+        private const int TabStripHeight = 36;
+        private const int TabWidth = 150;
+
+        private static readonly Color ActiveTabColor = Color.FromNonPremultiplied(55, 55, 55, 255);
 
         private static readonly XNamespace DcNamespace = "http://purl.org/dc/elements/1.1/";
         private static readonly Regex HtmlTagRegex = new Regex(@"<[^>]+>", RegexOptions.Compiled);
@@ -139,21 +142,62 @@ namespace entrhopi.HomeTab
                 Size = wndw.ContentRegion.Size
             };
 
-            var newModulesPanel = new Panel()
+            var tabStrip = new FlowPanel()
+            {
+                Parent              = parentPanel,
+                Location            = Point.Zero,
+                WidthSizingMode     = SizingMode.Fill,
+                Height              = TabStripHeight,
+                FlowDirection       = ControlFlowDirection.SingleLeftToRight,
+                ControlPadding      = new Vector2(4, 0),
+                OuterControlPadding = new Vector2(8, 4)
+            };
+
+            var newModulesTab = new Label()
+            {
+                Parent          = tabStrip,
+                Text            = "New Modules",
+                Size            = new Point(TabWidth, StandardButton.STANDARD_CONTROL_HEIGHT),
+                TextColor       = Color.White,
+                BackgroundColor = ActiveTabColor
+            };
+
+            var moduleUpdatesTab = new Label()
+            {
+                Parent          = tabStrip,
+                Text            = "Module Updates",
+                Size            = new Point(TabWidth, StandardButton.STANDARD_CONTROL_HEIGHT),
+                TextColor       = Color.LightGray,
+                BackgroundColor = Color.Transparent
+            };
+
+            var contentPanel = new Panel()
             {
                 Parent           = parentPanel,
+                Location         = new Point(0, TabStripHeight),
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            var newModulesPanel = new Panel()
+            {
+                Parent           = contentPanel,
                 Location         = Point.Zero,
+                WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
 
             var moduleUpdatesPanel = new Panel()
             {
-                Parent           = parentPanel,
-                HeightSizingMode = SizingMode.Fill
+                Parent           = contentPanel,
+                Location         = Point.Zero,
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill,
+                Visible          = false
             };
 
-            parentPanel.Resized += (sender, args) => UpdateColumnLayout(parentPanel, newModulesPanel, moduleUpdatesPanel);
-            UpdateColumnLayout(parentPanel, newModulesPanel, moduleUpdatesPanel);
+            newModulesTab.Click += (sender, args) => SelectTab(newModulesTab, newModulesPanel, moduleUpdatesTab, moduleUpdatesPanel);
+            moduleUpdatesTab.Click += (sender, args) => SelectTab(moduleUpdatesTab, moduleUpdatesPanel, newModulesTab, newModulesPanel);
 
             BuildFeedList(newModulesPanel, _newModules);
             BuildFeedList(moduleUpdatesPanel, _moduleUpdates);
@@ -161,13 +205,15 @@ namespace entrhopi.HomeTab
             return parentPanel;
         }
 
-        private static void UpdateColumnLayout(Panel parent, Panel left, Panel right)
+        private static void SelectTab(Label selectedTab, Panel selectedPanel, Label otherTab, Panel otherPanel)
         {
-            var leftWidth = Math.Max(0, (parent.ContentRegion.Width - PanelGap) / 2);
+            selectedTab.BackgroundColor = ActiveTabColor;
+            selectedTab.TextColor       = Color.White;
+            otherTab.BackgroundColor    = Color.Transparent;
+            otherTab.TextColor          = Color.LightGray;
 
-            left.Width = leftWidth;
-            right.Location = new Point(leftWidth + PanelGap, 0);
-            right.Width = Math.Max(0, parent.ContentRegion.Width - right.Left);
+            selectedPanel.Visible = true;
+            otherPanel.Visible    = false;
         }
 
         private static void BuildFeedList(Panel parent, IEnumerable<RssItem> items)
