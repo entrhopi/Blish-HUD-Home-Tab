@@ -22,7 +22,10 @@ namespace entrhopi.HomeTab
     public class Module : Blish_HUD.Modules.Module
     {
 
-        private const string RssFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
+        private const string NewModulesFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
+        private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
+        private const int PanelGap = 8;
+
         private static readonly XNamespace DcNamespace = "http://purl.org/dc/elements/1.1/";
         private static readonly Regex HtmlTagRegex = new Regex(@"<[^>]+>", RegexOptions.Compiled);
 
@@ -39,7 +42,8 @@ namespace entrhopi.HomeTab
 
         private Texture2D _homeIcon;
 
-        private readonly List<RssItem> _rssItems = new List<RssItem>();
+        private readonly List<RssItem> _newModules = new List<RssItem>();
+        private readonly List<RssItem> _moduleUpdates = new List<RssItem>();
 
         internal string TabName = "Home";
 
@@ -58,17 +62,24 @@ namespace entrhopi.HomeTab
 
         protected override async Task LoadAsync()
         {
+            await Task.WhenAll(
+                LoadFeed(NewModulesFeedUrl, _newModules),
+                LoadFeed(ModuleUpdatesFeedUrl, _moduleUpdates)).ConfigureAwait(false);
+        }
+
+        private static async Task LoadFeed(string url, List<RssItem> target)
+        {
             try
             {
                 using (var client = new WebClient())
                 {
-                    var xml = await client.DownloadStringTaskAsync(RssFeedUrl).ConfigureAwait(false);
-                    ParseFeed(xml);
+                    var xml = await client.DownloadStringTaskAsync(url).ConfigureAwait(false);
+                    ParseFeed(xml, url, target);
                 }
             }
             catch (Exception ex)
             {
-                Logger.Warn(ex, "Failed to load RSS feed from {url}.", RssFeedUrl);
+                Logger.Warn(ex, "Failed to load RSS feed from {url}.", url);
             }
         }
 
@@ -84,17 +95,17 @@ namespace entrhopi.HomeTab
             base.OnModuleLoaded(e);
         }
 
-        private void ParseFeed(string xml)
+        private static void ParseFeed(string xml, string url, List<RssItem> target)
         {
             var channel = XDocument.Parse(xml)?.Root?.Element("channel");
             if (channel == null)
             {
-                Logger.Warn("RSS feed from {url} did not contain a channel.", RssFeedUrl);
+                Logger.Warn("RSS feed from {url} did not contain a channel.", url);
                 return;
             }
 
-            _rssItems.Clear();
-            _rssItems.AddRange(channel.Elements("item").Select(item => new RssItem()
+            target.Clear();
+            target.AddRange(channel.Elements("item").Select(item => new RssItem()
             {
                 Title       = ElementValue(item, "title"),
                 Link        = ElementValue(item, "link"),
@@ -128,17 +139,42 @@ namespace entrhopi.HomeTab
                 Size = wndw.ContentRegion.Size
             };
 
-            var rssPanel = new Panel()
+            var newModulesPanel = new Panel()
             {
                 Parent           = parentPanel,
                 Location         = Point.Zero,
-                WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
 
+            var moduleUpdatesPanel = new Panel()
+            {
+                Parent           = parentPanel,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            parentPanel.Resized += (sender, args) => UpdateColumnLayout(parentPanel, newModulesPanel, moduleUpdatesPanel);
+            UpdateColumnLayout(parentPanel, newModulesPanel, moduleUpdatesPanel);
+
+            BuildFeedList(newModulesPanel, _newModules);
+            BuildFeedList(moduleUpdatesPanel, _moduleUpdates);
+
+            return parentPanel;
+        }
+
+        private static void UpdateColumnLayout(Panel parent, Panel left, Panel right)
+        {
+            var leftWidth = Math.Max(0, (parent.ContentRegion.Width - PanelGap) / 2);
+
+            left.Width = leftWidth;
+            right.Location = new Point(leftWidth + PanelGap, 0);
+            right.Width = Math.Max(0, parent.ContentRegion.Width - right.Left);
+        }
+
+        private static void BuildFeedList(Panel parent, IEnumerable<RssItem> items)
+        {
             var feedList = new FlowPanel()
             {
-                Parent              = rssPanel,
+                Parent              = parent,
                 Location            = Point.Zero,
                 WidthSizingMode     = SizingMode.Fill,
                 HeightSizingMode    = SizingMode.Fill,
@@ -148,7 +184,7 @@ namespace entrhopi.HomeTab
                 OuterControlPadding = new Vector2(10, 10)
             };
 
-            foreach (var item in _rssItems)
+            foreach (var item in items)
             {
                 var lines = new List<string>();
 
@@ -182,8 +218,6 @@ namespace entrhopi.HomeTab
                 itemPanel.Resized += (sender, args) => itemLabel.Width = itemPanel.ContentRegion.Width;
                 itemLabel.Width = itemPanel.ContentRegion.Width;
             }
-
-            return parentPanel;
         }
 
         protected override void Update(GameTime gameTime)
