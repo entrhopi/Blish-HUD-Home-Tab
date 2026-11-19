@@ -4,6 +4,9 @@ using Blish_HUD.Controls;
 using Blish_HUD.Modules;
 using Blish_HUD.Modules.Managers;
 using Blish_HUD.Settings;
+using Gw2Sharp;
+using Gw2Sharp.WebApi;
+using Gw2Sharp.WebApi.Http;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Newtonsoft.Json.Linq;
@@ -17,9 +20,11 @@ using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using TokenPermission = Gw2Sharp.WebApi.V2.Models.TokenPermission;
 using static Blish_HUD.GameService;
 
 namespace entrhopi.HomeTab
@@ -116,28 +121,35 @@ namespace entrhopi.HomeTab
 
             try
             {
-                if (!TryGetConfiguredApiKey(out var apiKey))
+                if (!Gw2ApiManager.HasSubtoken)
                 {
-                    _dailiesMessage = "Please configure an API key in the Blish HUD settings.";
+                    _dailiesMessage = string.IsNullOrWhiteSpace(Gw2Mumble.PlayerCharacter.Name)
+                        ? "Log in to a character so Blish HUD can obtain an API token. Dailies will load automatically."
+                        : "Blish HUD has not provided an API token yet. Check that an API key is configured in Blish HUD.";
                     _dailiesNeedsRetry = true;
                     return;
                 }
 
                 try
                 {
-                    using (var client = new WebClient())
-                    {
-                        client.Headers.Add("Authorization", "Bearer " + apiKey);
-                        var json = await client.DownloadStringTaskAsync(DailiesUrl).ConfigureAwait(false);
-                        ParseDailies(json);
-                        _dailiesMessage = string.Empty;
-                        _dailiesNeedsRetry = false;
-                    }
+                    var json = await GetWizardsVaultDailyJson().ConfigureAwait(false);
+                    ParseDailies(json);
+                    _dailiesMessage = string.Empty;
+                    _dailiesNeedsRetry = false;
                 }
                 catch (Exception ex)
                 {
                     Logger.Warn(ex, "Failed to load Wizard's Vault dailies.");
-                    _dailiesMessage = "Could not load dailies. Make sure the configured API key has the accountprogression permission.";
+
+                    if (!Gw2ApiManager.HasPermissions(new[] { TokenPermission.Account, TokenPermission.Progression }))
+                    {
+                        _dailiesMessage = "Blish HUD has not passed the account and progression permissions to this module yet. Disable and re-enable Home Tab once after checking them.";
+                    }
+                    else
+                    {
+                        _dailiesMessage = "Could not load dailies. Make sure your API key has the account and progression permissions.";
+                    }
+
                     _dailiesNeedsRetry = true;
                 }
             }
@@ -148,54 +160,26 @@ namespace entrhopi.HomeTab
             }
         }
 
-        private static bool TryGetConfiguredApiKey(out string apiKey)
+        private async Task<string> GetWizardsVaultDailyJson()
         {
-            apiKey = string.Empty;
+            // Use the Gw2Sharp client supplied by Blish HUD. The module never
+            // reads the user's API key; Blish HUD attaches its managed subtoken.
+            var apiClient = Gw2ApiManager.Gw2ApiClient;
+            var baseType = typeof(Gw2WebApiBaseClient);
+            var connection = baseType.GetProperty("Connection", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(apiClient) as IConnection;
+            var gw2Client = baseType.GetProperty("Gw2Client", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.GetValue(apiClient) as IGw2Client;
 
-            try
+            if (connection == null || gw2Client == null)
             {
-                var webApi = Gw2WebApi;
-                var webApiType = webApi.GetType();
-
-                // Prefer the key Blish HUD is currently using for this character.
-                var connectionField = webApiType.GetField("_privilegedConnection", BindingFlags.Instance | BindingFlags.NonPublic);
-                var connection = connectionField?.GetValue(webApi);
-                if (connection != null)
-                {
-                    var hasKeyMethod = connection.GetType().GetMethod("HasApiKey");
-                    if (hasKeyMethod != null && (bool)hasKeyMethod.Invoke(connection, null))
-                    {
-                        var connectionProperty = connection.GetType().GetProperty("Connection");
-                        var innerConnection = connectionProperty?.GetValue(connection);
-                        var tokenProperty = innerConnection?.GetType().GetProperty("AccessToken");
-                        apiKey = tokenProperty?.GetValue(innerConnection) as string ?? string.Empty;
-                        if (!string.IsNullOrWhiteSpace(apiKey)) return true;
-                    }
-                }
-
-                // Fall back to any key registered in Blish HUD settings.
-                var repositoryField = webApiType.GetField("_apiKeyRepository", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (repositoryField?.GetValue(webApi) is IEnumerable repository)
-                {
-                    foreach (var setting in repository)
-                    {
-                        var valueProperty = setting?.GetType().GetProperty("Value");
-                        var value = valueProperty?.GetValue(setting) as string;
-                        if (!string.IsNullOrWhiteSpace(value))
-                        {
-                            apiKey = value;
-                            return true;
-                        }
-                    }
-                }
-
-                return false;
+                throw new InvalidOperationException("Could not access Blish HUD's managed GW2 API connection.");
             }
-            catch (Exception ex)
-            {
-                Logger.Warn(ex, "Failed to read a configured Blish HUD API key.");
-                return false;
-            }
+
+            var request = new WebApiRequest(new Uri(DailiesUrl), connection, gw2Client);
+            var response = await request.ExecuteAsync<JsonElement>().ConfigureAwait(false);
+
+            return response.Content.GetRawText();
         }
 
         private void ParseDailies(string json)
@@ -232,8 +216,16 @@ namespace entrhopi.HomeTab
 
             SelectModuleTab();
 
+            Gw2ApiManager.SubtokenUpdated += OnSubtokenUpdated;
+
             // Base handler must be called
             base.OnModuleLoaded(e);
+        }
+
+        private void OnSubtokenUpdated(object sender, ValueEventArgs<IEnumerable<TokenPermission>> e)
+        {
+            _dailiesNeedsRetry = true;
+            _nextDailiesAttempt = DateTime.MinValue;
         }
 
         private void SelectModuleTab()
@@ -906,9 +898,7 @@ namespace entrhopi.HomeTab
         /// <inheritdoc />
         protected override void Unload()
         {
-            // Unload here
-
-            // All static members must be manually unset
+            Gw2ApiManager.SubtokenUpdated -= OnSubtokenUpdated;
         }
 
         private sealed class RssItem
