@@ -65,6 +65,13 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="HomeTab.cs" />
+    <Compile Include="HomeTabSettingsView.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Home-Tab.Contracts\HomeTab.Contracts.csproj">
+      <Project>{E79E7BB8-1B62-4E6B-A5FA-FDF8E53715FC}</Project>
+      <Name>HomeTab.Contracts</Name>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <Reference Include="AsyncClipboardService, Version=1.7.1.0, Culture=neutral, processorArchitecture=MSIL">

@@ -1,9 +1,11 @@
 ﻿using Blish_HUD;
 using Blish_HUD.Common.UI.Views;
 using Blish_HUD.Controls;
+using Blish_HUD.Graphics.UI;
 using Blish_HUD.Modules;
 using Blish_HUD.Modules.Managers;
 using Blish_HUD.Settings;
+using entrhopi.HomeTab.Contracts;
 using Gw2Sharp;
 using Gw2Sharp.WebApi;
 using Gw2Sharp.WebApi.Http;
@@ -29,6 +31,14 @@ using static Blish_HUD.GameService;
 
 namespace entrhopi.HomeTab
 {
+    internal enum HomeTabQuadrant
+    {
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight
+    }
+
     [Export(typeof(Blish_HUD.Modules.Module))]
     public class Module : Blish_HUD.Modules.Module
     {
@@ -37,9 +47,13 @@ namespace entrhopi.HomeTab
         private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
         private const string GuildWarsFeedUrl = "https://www.guildwars2.com/en/feed/";
         private const string DailiesUrl = "https://api.guildwars2.com/v2/account/wizardsvault/daily";
+        private const string NoneBlockId = "";
+        private const string LatestNewsBlockId = "entrhopi.home.latest-news";
+        private const string Gw2NewsBlockId = "entrhopi.home.gw2-news";
+        private const string DailiesBlockId = "entrhopi.home.dailies";
+        private const string ModuleUpdatesBlockId = "entrhopi.home.module-updates";
+        private const string NewModulesBlockId = "entrhopi.home.new-modules";
         private const int HeadingHeight = 36;
-        private const int TabStripHeight = 36;
-        private const int TabWidth = 150;
         private const int QuadrantGap = 8;
         private const int MaxMenuEntries = 5;
 
@@ -65,12 +79,28 @@ namespace entrhopi.HomeTab
         private readonly List<RssItem> _moduleUpdates = new List<RssItem>();
         private readonly List<RssItem> _guildWarsNews = new List<RssItem>();
         private readonly List<string> _dailies = new List<string>();
+        private readonly Dictionary<string, Task> _feedLoads = new Dictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
         private string _dailiesMessage = string.Empty;
         private Panel _dailiesPanel;
+        private Panel _homeTabPanel;
+        private Panel _topLeftPanel;
+        private Panel _topRightPanel;
+        private Panel _bottomLeftPanel;
+        private Panel _bottomRightPanel;
         private bool _dailiesDirty;
         private bool _dailiesNeedsRetry;
         private bool _dailiesLoading;
+        private bool _dailiesLoaded;
         private DateTime _nextDailiesAttempt = DateTime.MinValue;
+        private SettingEntry<string> _topLeftBlock;
+        private SettingEntry<string> _topRightBlock;
+        private SettingEntry<string> _bottomLeftBlock;
+        private SettingEntry<string> _bottomRightBlock;
+        private bool _normalizingAssignments;
+        private int _refreshVersion;
+
+        internal event EventHandler AssignmentsChanged;
+        internal event EventHandler BlocksChanged;
 
         internal string TabName = "Home";
 
@@ -79,7 +109,39 @@ namespace entrhopi.HomeTab
 
         protected override void DefineSettings(SettingCollection settings)
         {
+            _topLeftBlock = settings.DefineSetting(
+                "TopLeftBlock",
+                LatestNewsBlockId,
+                () => "Top left",
+                () => "Block shown in the top-left quadrant.");
 
+            _topRightBlock = settings.DefineSetting(
+                "TopRightBlock",
+                DailiesBlockId,
+                () => "Top right",
+                () => "Block shown in the top-right quadrant.");
+
+            _bottomLeftBlock = settings.DefineSetting(
+                "BottomLeftBlock",
+                Gw2NewsBlockId,
+                () => "Bottom left",
+                () => "Block shown in the bottom-left quadrant.");
+
+            _bottomRightBlock = settings.DefineSetting(
+                "BottomRightBlock",
+                ModuleUpdatesBlockId,
+                () => "Bottom right",
+                () => "Block shown in the bottom-right quadrant.");
+
+            _topLeftBlock.SettingChanged += OnAssignmentChanged;
+            _topRightBlock.SettingChanged += OnAssignmentChanged;
+            _bottomLeftBlock.SettingChanged += OnAssignmentChanged;
+            _bottomRightBlock.SettingChanged += OnAssignmentChanged;
+        }
+
+        public override IView GetSettingsView()
+        {
+            return new HomeTabSettingsView(this);
         }
 
         protected override void Initialize()
@@ -89,11 +151,7 @@ namespace entrhopi.HomeTab
 
         protected override async Task LoadAsync()
         {
-            await Task.WhenAll(
-                LoadFeed(NewModulesFeedUrl, _newModules),
-                LoadFeed(ModuleUpdatesFeedUrl, _moduleUpdates),
-                LoadFeed(GuildWarsFeedUrl, _guildWarsNews),
-                LoadDailies()).ConfigureAwait(false);
+            await EnsureAssignedBlockDataAsync().ConfigureAwait(false);
         }
 
         private static async Task LoadFeed(string url, List<RssItem> target)
@@ -136,6 +194,7 @@ namespace entrhopi.HomeTab
                     ParseDailies(json);
                     _dailiesMessage = string.Empty;
                     _dailiesNeedsRetry = false;
+                    _dailiesLoaded = true;
                 }
                 catch (Exception ex)
                 {
@@ -157,6 +216,289 @@ namespace entrhopi.HomeTab
             {
                 _dailiesLoading = false;
                 _dailiesDirty = true;
+            }
+        }
+
+        private SettingEntry<string>[] GetAssignmentSettings()
+        {
+            return new[] { _topLeftBlock, _topRightBlock, _bottomLeftBlock, _bottomRightBlock };
+        }
+
+        internal string GetAssignedBlockId(HomeTabQuadrant quadrant)
+        {
+            switch (quadrant)
+            {
+                case HomeTabQuadrant.TopLeft: return _topLeftBlock?.Value ?? NoneBlockId;
+                case HomeTabQuadrant.TopRight: return _topRightBlock?.Value ?? NoneBlockId;
+                case HomeTabQuadrant.BottomLeft: return _bottomLeftBlock?.Value ?? NoneBlockId;
+                case HomeTabQuadrant.BottomRight: return _bottomRightBlock?.Value ?? NoneBlockId;
+                default: return NoneBlockId;
+            }
+        }
+
+        internal void SetAssignedBlockId(HomeTabQuadrant quadrant, string blockId)
+        {
+            var setting = GetAssignmentSetting(quadrant);
+            if (setting == null) return;
+
+            setting.Value = blockId ?? NoneBlockId;
+        }
+
+        private SettingEntry<string> GetAssignmentSetting(HomeTabQuadrant quadrant)
+        {
+            switch (quadrant)
+            {
+                case HomeTabQuadrant.TopLeft: return _topLeftBlock;
+                case HomeTabQuadrant.TopRight: return _topRightBlock;
+                case HomeTabQuadrant.BottomLeft: return _bottomLeftBlock;
+                case HomeTabQuadrant.BottomRight: return _bottomRightBlock;
+                default: return null;
+            }
+        }
+
+        private void OnAssignmentChanged(object sender, ValueChangedEventArgs<string> e)
+        {
+            if (_normalizingAssignments) return;
+
+            NormalizeAssignments(sender as SettingEntry<string>, e.NewValue);
+            AssignmentsChanged?.Invoke(this, EventArgs.Empty);
+            _ = RefreshAssignmentsAsync();
+        }
+
+        private void NormalizeAssignments(SettingEntry<string> preferredSetting = null, string preferredValue = null)
+        {
+            _normalizingAssignments = true;
+
+            try
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                if (preferredSetting != null && !string.IsNullOrWhiteSpace(preferredValue))
+                {
+                    seen.Add(preferredValue);
+                }
+
+                foreach (var setting in GetAssignmentSettings())
+                {
+                    if (setting == null
+                     || setting == preferredSetting
+                     || string.IsNullOrWhiteSpace(setting.Value))
+                    {
+                        continue;
+                    }
+
+                    if (!seen.Add(setting.Value))
+                    {
+                        setting.Value = NoneBlockId;
+                    }
+                }
+            }
+            finally
+            {
+                _normalizingAssignments = false;
+            }
+        }
+
+        private async Task RefreshAssignmentsAsync()
+        {
+            int version = ++_refreshVersion;
+
+            await EnsureAssignedBlockDataAsync().ConfigureAwait(false);
+
+            if (version != _refreshVersion) return;
+
+            Overlay.QueueMainThreadUpdate(_ =>
+            {
+                if (version == _refreshVersion)
+                {
+                    RebuildHomeTab();
+                }
+            });
+        }
+
+        private async Task EnsureAssignedBlockDataAsync()
+        {
+            var assigned = new HashSet<string>(
+                GetAssignmentSettings().Where(setting => setting != null).Select(setting => setting.Value),
+                StringComparer.OrdinalIgnoreCase);
+
+            var tasks = new List<Task>();
+
+            if (assigned.Contains(LatestNewsBlockId) || assigned.Contains(Gw2NewsBlockId))
+            {
+                tasks.Add(EnsureFeedLoadedAsync(GuildWarsFeedUrl, _guildWarsNews));
+            }
+
+            if (assigned.Contains(ModuleUpdatesBlockId))
+            {
+                tasks.Add(EnsureFeedLoadedAsync(ModuleUpdatesFeedUrl, _moduleUpdates));
+            }
+
+            if (assigned.Contains(NewModulesBlockId))
+            {
+                tasks.Add(EnsureFeedLoadedAsync(NewModulesFeedUrl, _newModules));
+            }
+
+            if (assigned.Contains(DailiesBlockId))
+            {
+                tasks.Add(EnsureDailiesLoadedAsync());
+            }
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+
+        private Task EnsureFeedLoadedAsync(string url, List<RssItem> target)
+        {
+            lock (_feedLoads)
+            {
+                if (_feedLoads.TryGetValue(url, out var existingTask))
+                {
+                    return existingTask;
+                }
+
+                var loadTask = LoadFeed(url, target);
+                _feedLoads[url] = loadTask;
+                return loadTask;
+            }
+        }
+
+        private Task EnsureDailiesLoadedAsync()
+        {
+            if (_dailiesLoaded || _dailiesLoading) return Task.CompletedTask;
+
+            return LoadDailies();
+        }
+
+        internal bool IsBlockAssigned(string blockId)
+        {
+            return GetAssignmentSettings()
+                  .Any(setting => setting != null && string.Equals(setting.Value, blockId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        internal IReadOnlyList<IHomeTabBlock> GetAvailableBlocks()
+        {
+            var blocks = new List<IHomeTabBlock>()
+            {
+                new HomeTabBlock(LatestNewsBlockId, "Latest News", CreateLatestNewsContent),
+                new HomeTabBlock(Gw2NewsBlockId, "More GW2 News", CreateGw2NewsContent),
+                new HomeTabBlock(DailiesBlockId, "Dailies", CreateDailiesContent),
+                new HomeTabBlock(ModuleUpdatesBlockId, "Module Updates", CreateModuleUpdatesContent),
+                new HomeTabBlock(NewModulesBlockId, "New Modules", CreateNewModulesContent)
+            };
+
+            try
+            {
+                foreach (var externalBlock in HomeTabBlockRegistry.GetBlocks())
+                {
+                    if (blocks.All(block => !string.Equals(block.Id, externalBlock.Id, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        blocks.Add(externalBlock);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn(ex, "Failed to read external Home Tab blocks.");
+            }
+
+            return blocks.OrderBy(block => block.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToList();
+        }
+
+        private void OnRegistryBlocksChanged(object sender, EventArgs e)
+        {
+            Overlay.QueueMainThreadUpdate(_ =>
+            {
+                BlocksChanged?.Invoke(this, EventArgs.Empty);
+                RebuildHomeTab();
+            });
+        }
+
+        private Control CreateLatestNewsContent()
+        {
+            var root = new Panel();
+            BuildFeaturedNews(root, _guildWarsNews.OrderByDescending(entry => entry.PublishedAt).FirstOrDefault());
+            return root;
+        }
+
+        private Control CreateGw2NewsContent()
+        {
+            var root = new Panel();
+            var skipFeaturedEntry = IsBlockAssigned(LatestNewsBlockId) ? 1 : 0;
+            BuildFeedMenu(root, _guildWarsNews, skipFeaturedEntry);
+            return root;
+        }
+
+        private Control CreateDailiesContent()
+        {
+            var root = new Panel();
+            _dailiesPanel = root;
+            BuildDailiesView(root);
+            _dailiesDirty = false;
+            return root;
+        }
+
+        private Control CreateModuleUpdatesContent()
+        {
+            var root = new Panel();
+            BuildFeedMenu(root, _moduleUpdates);
+            return root;
+        }
+
+        private Control CreateNewModulesContent()
+        {
+            var root = new Panel();
+            BuildFeedMenu(root, _newModules);
+            return root;
+        }
+
+        private static Control CreateMessageContent(string message)
+        {
+            var root = new Panel();
+            var scrollPanel = new Panel()
+            {
+                Parent           = root,
+                Location         = Point.Zero,
+                WidthSizingMode  = SizingMode.Fill,
+                HeightSizingMode = SizingMode.Fill
+            };
+
+            scrollPanel.CanScroll = true;
+
+            var label = new Label()
+            {
+                Parent         = scrollPanel,
+                Text           = message,
+                Font           = Content.DefaultFont16,
+                TextColor      = Color.White,
+                WrapText       = true,
+                AutoSizeWidth  = false,
+                AutoSizeHeight = true
+            };
+
+            scrollPanel.Resized += (sender, args) => LayoutDailiesMessage(scrollPanel, label, message);
+            root.Resized += (sender, args) => LayoutDailiesMessage(scrollPanel, label, message);
+            LayoutDailiesMessage(scrollPanel, label, message);
+
+            return root;
+        }
+
+        private sealed class HomeTabBlock : IHomeTabBlock
+        {
+            private readonly Func<Control> _createContent;
+
+            public string Id { get; }
+            public string DisplayName { get; }
+
+            public HomeTabBlock(string id, string displayName, Func<Control> createContent)
+            {
+                Id = id;
+                DisplayName = displayName;
+                _createContent = createContent;
+            }
+
+            public Control CreateContent()
+            {
+                return _createContent();
             }
         }
 
@@ -217,6 +559,7 @@ namespace entrhopi.HomeTab
             SelectModuleTab();
 
             Gw2ApiManager.SubtokenUpdated += OnSubtokenUpdated;
+            HomeTabBlockRegistry.BlocksChanged += OnRegistryBlocksChanged;
 
             // Base handler must be called
             base.OnModuleLoaded(e);
@@ -297,209 +640,135 @@ namespace entrhopi.HomeTab
             var parentPanel = new Panel()
             {
                 CanScroll = false,
-                Size = wndw.ContentRegion.Size
+                Size      = wndw.ContentRegion.Size
             };
 
-            // Top left: newest Guild Wars 2 news entry.
-            var topLeftPanel = new Panel()
-            {
-                Parent = parentPanel
-            };
+            _homeTabPanel = parentPanel;
+            parentPanel.Resized += HomeTabOnResized;
 
-            var latestNewsHeader = new Panel()
-            {
-                Parent          = topLeftPanel,
-                Location        = Point.Zero,
-                WidthSizingMode = SizingMode.Fill,
-                Height          = HeadingHeight,
-                BackgroundColor = ActiveTabColor
-            };
+            BuildQuadrants(parentPanel);
 
-            new Label()
-            {
-                Parent         = latestNewsHeader,
-                Location       = new Point(10, 5),
-                Text           = "Latest News",
-                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
-                TextColor      = Color.White,
-                AutoSizeWidth  = true,
-                AutoSizeHeight = true
-            };
+            return parentPanel;
+        }
 
-            var latestNewsContent = new Panel()
-            {
-                Parent           = topLeftPanel,
-                Location         = new Point(0, HeadingHeight),
-                WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill
-            };
+        private void HomeTabOnResized(object sender, ResizedEventArgs e)
+        {
+            UpdateQuadrants(_homeTabPanel, _topLeftPanel, _topRightPanel, _bottomLeftPanel, _bottomRightPanel);
+        }
 
-            BuildFeaturedNews(latestNewsContent, _guildWarsNews.OrderByDescending(entry => entry.PublishedAt).FirstOrDefault());
+        private void RebuildHomeTab()
+        {
+            if (_homeTabPanel == null) return;
 
-            // Bottom left: Guild Wars 2 news.
-            var bottomLeftPanel = new Panel()
-            {
-                Parent = parentPanel
-            };
+            _homeTabPanel.ClearChildren();
+            BuildQuadrants(_homeTabPanel);
+        }
 
-            var guildWarsHeader = new Panel()
-            {
-                Parent          = bottomLeftPanel,
-                Location        = Point.Zero,
-                WidthSizingMode = SizingMode.Fill,
-                Height          = HeadingHeight,
-                BackgroundColor = ActiveTabColor
-            };
+        private void BuildQuadrants(Panel parent)
+        {
+            _dailiesPanel = null;
 
-            new Label()
-            {
-                Parent         = guildWarsHeader,
-                Location       = new Point(10, 5),
-                Text           = "More GW2 News",
-                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
-                TextColor      = Color.White,
-                AutoSizeWidth  = true,
-                AutoSizeHeight = true
-            };
+            _topLeftPanel = new Panel() { Parent = parent };
+            _topRightPanel = new Panel() { Parent = parent };
+            _bottomLeftPanel = new Panel() { Parent = parent };
+            _bottomRightPanel = new Panel() { Parent = parent };
 
-            var guildWarsContent = new Panel()
-            {
-                Parent           = bottomLeftPanel,
-                Location         = new Point(0, HeadingHeight),
-                WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill
-            };
+            UpdateQuadrants(parent, _topLeftPanel, _topRightPanel, _bottomLeftPanel, _bottomRightPanel);
 
-            BuildFeedMenu(guildWarsContent, _guildWarsNews, 1);
+            var blocks = GetAvailableBlocks()
+                         .GroupBy(block => block.Id, StringComparer.OrdinalIgnoreCase)
+                         .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
-            // Top right: Wizard's Vault dailies.
-            var topRightPanel = new Panel()
-            {
-                Parent = parentPanel
-            };
+            BuildQuadrant(_topLeftPanel, GetAssignedBlockId(HomeTabQuadrant.TopLeft), blocks);
+            BuildQuadrant(_topRightPanel, GetAssignedBlockId(HomeTabQuadrant.TopRight), blocks);
+            BuildQuadrant(_bottomLeftPanel, GetAssignedBlockId(HomeTabQuadrant.BottomLeft), blocks);
+            BuildQuadrant(_bottomRightPanel, GetAssignedBlockId(HomeTabQuadrant.BottomRight), blocks);
+        }
 
-            var dailiesHeader = new Panel()
-            {
-                Parent          = topRightPanel,
-                Location        = Point.Zero,
-                WidthSizingMode = SizingMode.Fill,
-                Height          = HeadingHeight,
-                BackgroundColor = ActiveTabColor
-            };
+        private void BuildQuadrant(Panel quadrant, string blockId, IDictionary<string, IHomeTabBlock> blocks)
+        {
+            if (string.IsNullOrWhiteSpace(blockId)) return;
 
-            new Label()
-            {
-                Parent         = dailiesHeader,
-                Location       = new Point(10, 5),
-                Text           = "Dailies",
-                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
-                TextColor      = Color.White,
-                AutoSizeWidth  = true,
-                AutoSizeHeight = true
-            };
+            IHomeTabBlock block = null;
+            blocks.TryGetValue(blockId, out block);
 
-            var dailiesContent = new Panel()
-            {
-                Parent           = topRightPanel,
-                Location         = new Point(0, HeadingHeight),
-                WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill
-            };
-
-            _dailiesPanel = dailiesContent;
-            BuildDailiesView(dailiesContent);
-            _dailiesDirty = false;
-
-            // Bottom right: tabbed Blish HUD module feeds.
-            var bottomRightPanel = new Panel()
-            {
-                Parent = parentPanel
-            };
-
-            var moduleHeader = new Panel()
-            {
-                Parent          = bottomRightPanel,
-                Location        = Point.Zero,
-                WidthSizingMode = SizingMode.Fill,
-                Height          = HeadingHeight,
-                BackgroundColor = ActiveTabColor
-            };
-
-            new Label()
-            {
-                Parent         = moduleHeader,
-                Location       = new Point(10, 5),
-                Text           = "Module News",
-                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
-                TextColor      = Color.White,
-                AutoSizeWidth  = true,
-                AutoSizeHeight = true
-            };
-
-            var tabStrip = new FlowPanel()
-            {
-                Parent              = bottomRightPanel,
-                Location            = new Point(0, HeadingHeight),
-                WidthSizingMode     = SizingMode.Fill,
-                Height              = TabStripHeight,
-                FlowDirection       = ControlFlowDirection.SingleLeftToRight,
-                ControlPadding      = new Vector2(4, 0),
-                OuterControlPadding = new Vector2(8, 4)
-            };
-
-            var moduleUpdatesTab = new Label()
-            {
-                Parent          = tabStrip,
-                Text            = "Module Updates",
-                Size            = new Point(TabWidth, StandardButton.STANDARD_CONTROL_HEIGHT),
-                TextColor       = Color.White,
-                BackgroundColor = ActiveTabColor
-            };
-
-            var newModulesTab = new Label()
-            {
-                Parent          = tabStrip,
-                Text            = "New Modules",
-                Size            = new Point(TabWidth, StandardButton.STANDARD_CONTROL_HEIGHT),
-                TextColor       = Color.LightGray,
-                BackgroundColor = Color.Transparent
-            };
+            string headerText = block?.DisplayName ?? "Unavailable Block";
+            var header = CreateBlockHeader(quadrant, headerText);
 
             var contentPanel = new Panel()
             {
-                Parent           = bottomRightPanel,
-                Location         = new Point(0, HeadingHeight + TabStripHeight),
+                Parent           = quadrant,
+                Location         = new Point(0, HeadingHeight),
                 WidthSizingMode  = SizingMode.Fill,
                 HeightSizingMode = SizingMode.Fill
             };
 
-            var newModulesPanel = new Panel()
+            Control content;
+
+            if (block == null)
             {
-                Parent           = contentPanel,
-                Location         = Point.Zero,
-                WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill,
-                Visible          = false
+                content = CreateMessageContent("This block is unavailable. Enable the module that provides it or choose another block in the Home Tab settings.");
+            }
+            else
+            {
+                try
+                {
+                    content = block.CreateContent();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn(ex, "Home Tab block {blockId} failed to create its content.", blockId);
+                    content = CreateMessageContent("This block failed to load.");
+                }
+            }
+
+            if (content == null)
+            {
+                content = CreateMessageContent("This block does not provide any content.");
+            }
+
+            content.Parent   = contentPanel;
+            content.Location = Point.Zero;
+            content.Size     = new Point(contentPanel.Width, contentPanel.Height);
+
+            if (content is Container container)
+            {
+                container.WidthSizingMode  = SizingMode.Fill;
+                container.HeightSizingMode = SizingMode.Fill;
+            }
+
+            contentPanel.Resized += (sender, args) =>
+            {
+                if (content.Parent != null)
+                {
+                    content.Size = new Point(contentPanel.Width, contentPanel.Height);
+                }
+            };
+        }
+
+        private static Panel CreateBlockHeader(Panel quadrant, string title)
+        {
+            var header = new Panel()
+            {
+                Parent          = quadrant,
+                Location        = Point.Zero,
+                WidthSizingMode = SizingMode.Fill,
+                Height          = HeadingHeight,
+                BackgroundColor = ActiveTabColor
             };
 
-            var moduleUpdatesPanel = new Panel()
+            new Label()
             {
-                Parent           = contentPanel,
-                Location         = Point.Zero,
-                WidthSizingMode  = SizingMode.Fill,
-                HeightSizingMode = SizingMode.Fill
+                Parent         = header,
+                Location       = new Point(10, 5),
+                Text           = title,
+                Font           = Content.GetFont(ContentService.FontFace.Menomonia, ContentService.FontSize.Size24, ContentService.FontStyle.Regular),
+                TextColor      = Color.White,
+                AutoSizeWidth  = true,
+                AutoSizeHeight = true
             };
 
-            newModulesTab.Click += (sender, args) => SelectTab(newModulesTab, newModulesPanel, moduleUpdatesTab, moduleUpdatesPanel);
-            moduleUpdatesTab.Click += (sender, args) => SelectTab(moduleUpdatesTab, moduleUpdatesPanel, newModulesTab, newModulesPanel);
-
-            BuildFeedMenu(newModulesPanel, _newModules);
-            BuildFeedMenu(moduleUpdatesPanel, _moduleUpdates);
-
-            parentPanel.Resized += (sender, args) => UpdateQuadrants(parentPanel, topLeftPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
-            UpdateQuadrants(parentPanel, topLeftPanel, topRightPanel, bottomLeftPanel, bottomRightPanel);
-
-            return parentPanel;
+            return header;
         }
 
         private static void UpdateQuadrants(Panel parent, Panel topLeft, Panel topRight, Panel bottomLeft, Panel bottomRight)
@@ -523,17 +792,6 @@ namespace entrhopi.HomeTab
 
             bottomRight.Location = new Point(rightColumnX, bottomRowY);
             bottomRight.Size     = new Point(Math.Max(0, width - rightColumnX), bottomHeight);
-        }
-
-        private static void SelectTab(Label selectedTab, Panel selectedPanel, Label otherTab, Panel otherPanel)
-        {
-            selectedTab.BackgroundColor = ActiveTabColor;
-            selectedTab.TextColor       = Color.White;
-            otherTab.BackgroundColor    = Color.Transparent;
-            otherTab.TextColor          = Color.LightGray;
-
-            selectedPanel.Visible = true;
-            otherPanel.Visible    = false;
         }
 
         private void BuildDailiesView(Panel parent)
@@ -881,7 +1139,10 @@ namespace entrhopi.HomeTab
 
         protected override void Update(GameTime gameTime)
         {
-            if (_dailiesNeedsRetry && !_dailiesLoading && DateTime.UtcNow >= _nextDailiesAttempt)
+            if (_dailiesNeedsRetry
+             && IsBlockAssigned(DailiesBlockId)
+             && !_dailiesLoading
+             && DateTime.UtcNow >= _nextDailiesAttempt)
             {
                 _nextDailiesAttempt = DateTime.UtcNow.AddSeconds(5);
                 _ = LoadDailies();
@@ -899,6 +1160,15 @@ namespace entrhopi.HomeTab
         protected override void Unload()
         {
             Gw2ApiManager.SubtokenUpdated -= OnSubtokenUpdated;
+            HomeTabBlockRegistry.BlocksChanged -= OnRegistryBlocksChanged;
+
+            _topLeftBlock.SettingChanged -= OnAssignmentChanged;
+            _topRightBlock.SettingChanged -= OnAssignmentChanged;
+            _bottomLeftBlock.SettingChanged -= OnAssignmentChanged;
+            _bottomRightBlock.SettingChanged -= OnAssignmentChanged;
+
+            _homeTabPanel = null;
+            _dailiesPanel = null;
         }
 
         private sealed class RssItem

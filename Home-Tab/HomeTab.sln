@@ -5,6 +5,8 @@ VisualStudioVersion = 16.0.31515.178
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HomeTab", "HomeTab.csproj", "{4BB99667-FB4B-4A63-8F88-717ACEB8F710}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HomeTab.Contracts", "..\Home-Tab.Contracts\HomeTab.Contracts.csproj", "{E79E7BB8-1B62-4E6B-A5FA-FDF8E53715FC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +17,10 @@ Global
 		{4BB99667-FB4B-4A63-8F88-717ACEB8F710}.Debug|x64.Build.0 = Debug|x64
 		{4BB99667-FB4B-4A63-8F88-717ACEB8F710}.Release|x64.ActiveCfg = Release|x64
 		{4BB99667-FB4B-4A63-8F88-717ACEB8F710}.Release|x64.Build.0 = Release|x64
+		{E79E7BB8-1B62-4E6B-A5FA-FDF8E53715FC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E79E7BB8-1B62-4E6B-A5FA-FDF8E53715FC}.Debug|x64.Build.0 = Debug|Any CPU
+		{E79E7BB8-1B62-4E6B-A5FA-FDF8E53715FC}.Release|x64.ActiveCfg = Release|Any CPU
+		{E79E7BB8-1B62-4E6B-A5FA-FDF8E53715FC}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
