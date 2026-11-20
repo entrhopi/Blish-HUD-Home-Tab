@@ -380,7 +380,7 @@ namespace entrhopi.HomeTab
             var blocks = new List<IHomeTabBlock>()
             {
                 new HomeTabBlock(LatestNewsBlockId, "Latest News", CreateLatestNewsContent),
-                new HomeTabBlock(Gw2NewsBlockId, "More GW2 News", CreateGw2NewsContent),
+                new HomeTabBlock(Gw2NewsBlockId, "GW2 News", CreateGw2NewsContent),
                 new HomeTabBlock(DailiesBlockId, "Dailies", CreateDailiesContent),
                 new HomeTabBlock(ModuleUpdatesBlockId, "Module Updates", CreateModuleUpdatesContent),
                 new HomeTabBlock(NewModulesBlockId, "New Modules", CreateNewModulesContent)
@@ -423,8 +423,7 @@ namespace entrhopi.HomeTab
         private Control CreateGw2NewsContent()
         {
             var root = new Panel();
-            var skipFeaturedEntry = IsBlockAssigned(LatestNewsBlockId) ? 1 : 0;
-            BuildFeedMenu(root, _guildWarsNews, skipFeaturedEntry);
+            BuildFeedMenu(root, _guildWarsNews);
             return root;
         }
 
