@@ -46,9 +46,11 @@ namespace entrhopi.HomeTab
         private const string NewModulesFeedUrl = "https://pkgs.blishhud.com/new-modules.xml";
         private const string ModuleUpdatesFeedUrl = "https://pkgs.blishhud.com/module-updates.xml";
         private const string GuildWarsFeedUrl = "https://www.guildwars2.com/en/feed/";
+        private const string GameUpdatesFeedUrl = "https://en-forum.guildwars2.com/forum/6-game-update-notes.xml/";
         private const string DailiesUrl = "https://api.guildwars2.com/v2/account/wizardsvault/daily";
         private const string NoneBlockId = "";
         private const string LatestNewsBlockId = "entrhopi.home.latest-news";
+        private const string LatestGameUpdateBlockId = "entrhopi.home.latest-game-update";
         private const string Gw2NewsBlockId = "entrhopi.home.gw2-news";
         private const string DailiesBlockId = "entrhopi.home.dailies";
         private const string ModuleUpdatesBlockId = "entrhopi.home.module-updates";
@@ -61,6 +63,8 @@ namespace entrhopi.HomeTab
 
         private static readonly XNamespace DcNamespace = "http://purl.org/dc/elements/1.1/";
         private static readonly Regex HtmlTagRegex = new Regex(@"<[^>]+>", RegexOptions.Compiled);
+        private static readonly Regex HtmlBreakRegex = new Regex(@"<\s*(br|/p|/div|/h[1-6]|/li|/tr)\s*/?>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex HtmlWhitespaceRegex = new Regex(@"[ \t\f\v]+", RegexOptions.Compiled);
 
         private static readonly Logger Logger = Logger.GetLogger<Module>();
 
@@ -78,6 +82,7 @@ namespace entrhopi.HomeTab
         private readonly List<RssItem> _newModules = new List<RssItem>();
         private readonly List<RssItem> _moduleUpdates = new List<RssItem>();
         private readonly List<RssItem> _guildWarsNews = new List<RssItem>();
+        private readonly List<RssItem> _gameUpdates = new List<RssItem>();
         private readonly List<string> _dailies = new List<string>();
         private readonly Dictionary<string, Task> _feedLoads = new Dictionary<string, Task>(StringComparer.OrdinalIgnoreCase);
         private string _dailiesMessage = string.Empty;
@@ -329,6 +334,11 @@ namespace entrhopi.HomeTab
                 tasks.Add(EnsureFeedLoadedAsync(GuildWarsFeedUrl, _guildWarsNews));
             }
 
+            if (assigned.Contains(LatestGameUpdateBlockId))
+            {
+                tasks.Add(EnsureFeedLoadedAsync(GameUpdatesFeedUrl, _gameUpdates));
+            }
+
             if (assigned.Contains(ModuleUpdatesBlockId))
             {
                 tasks.Add(EnsureFeedLoadedAsync(ModuleUpdatesFeedUrl, _moduleUpdates));
@@ -380,6 +390,7 @@ namespace entrhopi.HomeTab
             var blocks = new List<IHomeTabBlock>()
             {
                 new HomeTabBlock(LatestNewsBlockId, "Latest News", CreateLatestNewsContent),
+                new HomeTabBlock(LatestGameUpdateBlockId, "Latest Game Update", CreateLatestGameUpdateContent),
                 new HomeTabBlock(Gw2NewsBlockId, "GW2 News", CreateGw2NewsContent),
                 new HomeTabBlock(DailiesBlockId, "Dailies", CreateDailiesContent),
                 new HomeTabBlock(ModuleUpdatesBlockId, "Module Updates", CreateModuleUpdatesContent),
@@ -417,6 +428,17 @@ namespace entrhopi.HomeTab
         {
             var root = new Panel();
             BuildFeaturedNews(root, _guildWarsNews.OrderByDescending(entry => entry.PublishedAt).FirstOrDefault());
+            return root;
+        }
+
+        private Control CreateLatestGameUpdateContent()
+        {
+            var root = new Panel();
+            BuildFeaturedNews(
+                root,
+                _gameUpdates.OrderByDescending(entry => entry.PublishedAt).FirstOrDefault(),
+                "No game updates available.",
+                6);
             return root;
         }
 
@@ -613,7 +635,9 @@ namespace entrhopi.HomeTab
                     Published   = published,
                     PublishedAt = publishedAt,
                     Author      = ElementValue(item, DcNamespace + "creator"),
-                    Description = ToPlainText(ElementValue(item, "description"))
+                    Description = string.Equals(url, GameUpdatesFeedUrl, StringComparison.OrdinalIgnoreCase)
+                        ? ToPlainTextWithLineBreaks(ElementValue(item, "description"))
+                        : ToPlainText(ElementValue(item, "description"))
                 };
             }));
         }
@@ -632,6 +656,26 @@ namespace entrhopi.HomeTab
             text = text.Replace("\r\n", "\n").Replace('\r', '\n');
 
             return text.Trim();
+        }
+
+        private static string ToPlainTextWithLineBreaks(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return string.Empty;
+
+            var text = WebUtility.HtmlDecode(html);
+            text = HtmlBreakRegex.Replace(text, "\n");
+            text = HtmlTagRegex.Replace(text, string.Empty);
+            text = text.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\u00A0', ' ');
+
+            var lines = text
+                .Split('\n')
+                .Select(line => HtmlWhitespaceRegex.Replace(line, " ").Trim())
+                .Where(line => line.Length > 0);
+
+            var result = string.Join("\n", lines);
+
+            // Keep the preview bounded; the UI crops the wrapped result to six lines.
+            return result.Length <= 2000 ? result : result.Substring(0, 2000).TrimEnd();
         }
 
         private Panel HomeTabView(WindowBase wndw)
@@ -934,7 +978,7 @@ namespace entrhopi.HomeTab
             return result.ToString().TrimEnd('\n');
         }
 
-        private static void BuildFeaturedNews(Panel parent, RssItem item)
+        private static void BuildFeaturedNews(Panel parent, RssItem item, string emptyMessage = "No news available.", int descriptionLineLimit = 0)
         {
             var scrollPanel = new Panel()
             {
@@ -948,13 +992,14 @@ namespace entrhopi.HomeTab
             scrollPanel.CanScroll = true;
 
             var labels = new List<KeyValuePair<Label, string>>();
+            var lineLimits = new Dictionary<Label, int>();
 
             if (item == null)
             {
                 var noNews = new Label()
                 {
                     Parent         = scrollPanel,
-                    Text           = "No news available.",
+                    Text           = emptyMessage,
                     Font           = Content.DefaultFont14,
                     TextColor      = Color.White,
                     WrapText       = true,
@@ -962,7 +1007,7 @@ namespace entrhopi.HomeTab
                     AutoSizeHeight = true
                 };
 
-                labels.Add(new KeyValuePair<Label, string>(noNews, "No news available."));
+                labels.Add(new KeyValuePair<Label, string>(noNews, emptyMessage));
             }
             else
             {
@@ -1017,6 +1062,11 @@ namespace entrhopi.HomeTab
                     };
 
                     labels.Add(new KeyValuePair<Label, string>(description, item.Description));
+
+                    if (descriptionLineLimit > 0)
+                    {
+                        lineLimits[description] = descriptionLineLimit;
+                    }
                 }
 
                 if (!string.IsNullOrWhiteSpace(item.Link))
@@ -1038,13 +1088,13 @@ namespace entrhopi.HomeTab
                 }
             }
 
-            scrollPanel.Resized += (sender, args) => LayoutFeaturedNews(parent, labels);
-            parent.Resized += (sender, args) => LayoutFeaturedNews(parent, labels);
-            scrollPanel.ContentResized += (sender, args) => LayoutFeaturedNews(parent, labels);
-            LayoutFeaturedNews(parent, labels);
+            scrollPanel.Resized += (sender, args) => LayoutFeaturedNews(parent, labels, lineLimits);
+            parent.Resized += (sender, args) => LayoutFeaturedNews(parent, labels, lineLimits);
+            scrollPanel.ContentResized += (sender, args) => LayoutFeaturedNews(parent, labels, lineLimits);
+            LayoutFeaturedNews(parent, labels, lineLimits);
         }
 
-        private static void LayoutFeaturedNews(Panel parent, IList<KeyValuePair<Label, string>> labels)
+        private static void LayoutFeaturedNews(Panel parent, IList<KeyValuePair<Label, string>> labels, IDictionary<Label, int> lineLimits = null)
         {
             var width = GetPaddedContentWidth(parent);
             var y = 10;
@@ -1053,6 +1103,13 @@ namespace entrhopi.HomeTab
             {
                 var label = entry.Key;
                 var wrapped = WrapTextForWidth(label, entry.Value, width);
+
+                if (lineLimits != null
+                 && lineLimits.TryGetValue(label, out var maxLines)
+                 && maxLines > 0)
+                {
+                    wrapped = CropToLines(wrapped, maxLines);
+                }
 
                 label.WrapText = false;
                 if (label.Text != wrapped)
@@ -1069,6 +1126,17 @@ namespace entrhopi.HomeTab
                 label.Location = new Point(10, y);
                 y += label.Height + 6;
             }
+        }
+
+        private static string CropToLines(string text, int maxLines)
+        {
+            if (string.IsNullOrEmpty(text) || maxLines <= 0) return text;
+
+            var lines = text.Split('\n');
+            if (lines.Length <= maxLines) return text;
+
+            var cropped = string.Join("\n", lines.Take(maxLines));
+            return cropped.TrimEnd() + " …";
         }
 
         private static void BuildFeedMenu(Panel parent, IEnumerable<RssItem> items, int skip = 0)

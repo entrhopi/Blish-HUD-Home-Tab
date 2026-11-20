@@ -5,7 +5,7 @@
   "package": "HomeTab.dll",
   "manifest_version": 1,
 
-  "description": "Blish HUD Home Tab with configurable info blocks, GW2 and module news, and Wizard's Vault dailies. Choose which block appears in each quadrant from the module settings. Wizard's Vault dailies require a character to be logged in so Blish HUD can provide an API token.",
+  "description": "Blish HUD Home Tab with configurable info blocks, GW2 news, game update notes, module news, and Wizard's Vault dailies. Choose which block appears in each quadrant from the module settings. Wizard's Vault dailies require a character to be logged in so Blish HUD can provide an API token.",
   "dependencies": {
     "bh.blishhud": ">=1.3.0"
   },

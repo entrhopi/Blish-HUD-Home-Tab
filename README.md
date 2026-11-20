@@ -5,6 +5,7 @@ A configurable Home tab for Blish HUD with four quadrants.
 Each quadrant can be assigned a block from the module settings:
 
 - Latest News
+- Latest Game Update
 - GW2 News
 - Dailies
 - Module Updates
